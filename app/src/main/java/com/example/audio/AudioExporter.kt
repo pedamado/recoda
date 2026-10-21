@@ -2,142 +2,144 @@ package com.example.audio
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.util.Log
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+/**
+ * Audio exporter supporting:
+ * 1. Default: Original 192 kb/s stereo 44100Hz 16-bit .m4a (pristine master)
+ * 2. Medium quality: 128 kb/s stereo 44100Hz 16-bit .mp3
+ * 3. Small file size: 64 kb/s mono 44100Hz 16-bit .mp3
+ *
+ * No WAV export or support.
+ */
 object AudioExporter {
 
-    enum class ExportFormat {
-        WAV,
-        MP3
-    }
+    private const val TAG = "AudioExporter"
 
-    enum class QualityPreset(val label: String, val description: String) {
-        FAST_SHARING("fast sharing", "high compression • fast transfer"),
-        NORMAL_AUDIO("normal audio", "standard quality • balanced size"),
-        MEDIUM_COMPRESSION("medium compression", "enhanced fidelity • moderate size"),
-        HIGH_STUDIO_QUALITY("high studio quality", "pristine master • maximum fidelity")
+    enum class ExportPreset(
+        val label: String,
+        val description: String,
+        val extension: String,
+        val bitrateKbps: Int,
+        val sampleRate: Int,
+        val channels: Int
+    ) {
+        ORIGINAL_M4A(
+            label = "original m4a (192 kb/s stereo)",
+            description = "44.1kHz • 192 kb/s stereo • original master (default)",
+            extension = "m4a",
+            bitrateKbps = 192,
+            sampleRate = 44100,
+            channels = 2
+        ),
+        MP3_STEREO_128K(
+            label = "medium quality mp3 (128 kb/s stereo)",
+            description = "44.1kHz 16-bit • 128 kb/s stereo • balanced size",
+            extension = "mp3",
+            bitrateKbps = 128,
+            sampleRate = 44100,
+            channels = 2
+        ),
+        MP3_MONO_64K(
+            label = "small file size mp3 (64 kb/s mono)",
+            description = "44.1kHz 16-bit • 64 kb/s mono • compact",
+            extension = "mp3",
+            bitrateKbps = 64,
+            sampleRate = 44100,
+            channels = 1
+        )
     }
 
     /**
-     * Exports a WAV file to target format and quality preset into the dedicated exports directory.
+     * Exports an audio recording to the selected preset in the dedicated exports directory.
      * Prevents exported files from appearing as recordings in the gallery.
      */
     fun export(
         sourceFile: File,
-        format: ExportFormat,
-        preset: QualityPreset,
+        preset: ExportPreset,
         targetDir: File
     ): File? {
         if (!sourceFile.exists()) return null
         targetDir.mkdirs()
 
         val baseName = sourceFile.nameWithoutExtension
-        val ext = if (format == ExportFormat.MP3) "mp3" else "wav"
         val presetTag = when (preset) {
-            QualityPreset.FAST_SHARING -> "fast"
-            QualityPreset.NORMAL_AUDIO -> "norm"
-            QualityPreset.MEDIUM_COMPRESSION -> "med"
-            QualityPreset.HIGH_STUDIO_QUALITY -> "studio"
+            ExportPreset.ORIGINAL_M4A -> "master"
+            ExportPreset.MP3_STEREO_128K -> "128k_stereo"
+            ExportPreset.MP3_MONO_64K -> "64k_mono"
         }
-        val targetFile = File(targetDir, "${baseName}_$presetTag.$ext")
+        val targetFile = File(targetDir, "${baseName}_$presetTag.${preset.extension}")
 
         return try {
-            when (format) {
-                ExportFormat.WAV -> exportWav(sourceFile, targetFile, preset)
-                ExportFormat.MP3 -> exportMp3(sourceFile, targetFile, preset)
+            when (preset) {
+                ExportPreset.ORIGINAL_M4A -> exportOriginalM4a(sourceFile, targetFile)
+                ExportPreset.MP3_STEREO_128K,
+                ExportPreset.MP3_MONO_64K -> exportMp3(sourceFile, targetFile, preset)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "Export failed for preset $preset", e)
             null
         }
     }
 
-    private fun exportWav(sourceFile: File, targetFile: File, preset: QualityPreset): File? {
-        val targetSampleRate = when (preset) {
-            QualityPreset.FAST_SHARING -> 22050
-            QualityPreset.NORMAL_AUDIO -> 44100
-            QualityPreset.MEDIUM_COMPRESSION -> 32000
-            QualityPreset.HIGH_STUDIO_QUALITY -> 48000
-        }
-        val targetChannels = if (preset == QualityPreset.FAST_SHARING) 1 else 2
-
-        if (targetSampleRate == 48000 && targetChannels == 2) {
+    private fun exportOriginalM4a(sourceFile: File, targetFile: File): File? {
+        if (sourceFile.extension.equals("m4a", ignoreCase = true)) {
             sourceFile.copyTo(targetFile, overwrite = true)
             return targetFile
         }
-
-        val fis = FileInputStream(sourceFile)
-        fis.skip(44) // Skip WAV header
-        val pcmData = fis.readBytes()
-        fis.close()
-
-        val inSamples = ShortArray(pcmData.size / 2)
-        ByteBuffer.wrap(pcmData).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(inSamples)
-
-        val inFrames = inSamples.size / 2
-        if (inFrames <= 0) return null
-
-        val resampleRatio = targetSampleRate.toDouble() / 48000.0
-        val outFrames = (inFrames * resampleRatio).toInt().coerceAtLeast(1)
-        val outSamples = ShortArray(outFrames * targetChannels)
-
-        for (i in 0 until outFrames) {
-            val srcFrameIdx = (i / resampleRatio).toInt().coerceIn(0, inFrames - 1)
-            val left = inSamples[srcFrameIdx * 2]
-            val right = inSamples[srcFrameIdx * 2 + 1]
-
-            if (targetChannels == 1) {
-                outSamples[i] = ((left.toInt() + right.toInt()) / 2).toShort()
-            } else {
-                outSamples[i * 2] = left
-                outSamples[i * 2 + 1] = right
-            }
-        }
-
-        val outBytes = ByteArray(outSamples.size * 2)
-        ByteBuffer.wrap(outBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(outSamples)
-
-        val header = WavWriter.createWavHeader(
-            totalAudioLen = outBytes.size.toLong(),
-            sampleRate = targetSampleRate,
-            channels = targetChannels,
-            bitsPerSample = 16
+        // If source is not m4a, transcode to 192k stereo m4a
+        val decoded = AudioDecoder.decodeToStereoPcm(sourceFile, 44100) ?: return null
+        val writer = M4aWriter(
+            outputFile = targetFile,
+            sampleRate = 44100,
+            numChannels = 2,
+            bitRate = 192000
         )
-
-        FileOutputStream(targetFile).use { fos ->
-            fos.write(header)
-            fos.write(outBytes)
-            fos.flush()
+        try {
+            writer.writeSamples(decoded.samples, decoded.samples.size)
+        } finally {
+            writer.close()
         }
-
-        return targetFile
-    }
-
-    private fun exportMp3(sourceFile: File, targetFile: File, preset: QualityPreset): File? {
-        val (bitrateKbps, sampleRate, channels) = when (preset) {
-            QualityPreset.FAST_SHARING -> Triple(64, 22050, 1)
-            QualityPreset.NORMAL_AUDIO -> Triple(128, 44100, 2)
-            QualityPreset.MEDIUM_COMPRESSION -> Triple(192, 44100, 2)
-            QualityPreset.HIGH_STUDIO_QUALITY -> Triple(320, 48000, 2)
-        }
-
-        // Try MediaCodec with standard audio/mpeg
-        var encoded = tryEncodeMediaCodecMp3(sourceFile, targetFile, bitrateKbps, sampleRate, channels)
-
-        // If platform lacks audio/mpeg encoder, export as high-compatibility clean compressed WAV
-        // and do NOT output raw PCM pseudo-MP3 frames that produce noise!
-        if (!encoded || targetFile.length() <= 0) {
-            exportWav(sourceFile, targetFile, preset)
-        }
-
         return if (targetFile.exists() && targetFile.length() > 0) targetFile else null
     }
 
+    private fun exportMp3(sourceFile: File, targetFile: File, preset: ExportPreset): File? {
+        val encoded = tryEncodeMediaCodecMp3(
+            sourceFile = sourceFile,
+            targetMp3 = targetFile,
+            bitrateKbps = preset.bitrateKbps,
+            sampleRate = preset.sampleRate,
+            channels = preset.channels
+        )
+
+        if (encoded && targetFile.exists() && targetFile.length() > 0) {
+            return targetFile
+        }
+
+        // Clean fallback if hardware encoder lacks audio/mpeg: transcode to efficient AAC (.m4a) at that bitrate
+        // Notice: strictly compressed mobile audio, NO WAV files!
+        val fallbackFile = File(targetFile.parentFile, "${targetFile.nameWithoutExtension}.m4a")
+        val decoded = AudioDecoder.decodeToStereoPcm(sourceFile, preset.sampleRate) ?: return null
+        val writer = M4aWriter(
+            outputFile = fallbackFile,
+            sampleRate = preset.sampleRate,
+            numChannels = preset.channels,
+            bitRate = preset.bitrateKbps * 1000
+        )
+        try {
+            writer.writeSamples(decoded.samples, decoded.samples.size)
+        } finally {
+            writer.close()
+        }
+        return if (fallbackFile.exists() && fallbackFile.length() > 0) fallbackFile else null
+    }
+
     private fun tryEncodeMediaCodecMp3(
-        sourceWav: File,
+        sourceFile: File,
         targetMp3: File,
         bitrateKbps: Int,
         sampleRate: Int,
@@ -155,12 +157,27 @@ object AudioExporter {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             codec.start()
 
-            val fos = FileOutputStream(targetMp3)
-            val fis = FileInputStream(sourceWav)
-            fis.skip(44)
+            val decoded = AudioDecoder.decodeToStereoPcm(sourceFile, sampleRate) ?: return false
+            val inSamples = decoded.samples
 
-            val inputBuffer = ByteArray(4096)
+            val pcmBytes: ByteArray
+            if (channels == 1) {
+                val monoCount = inSamples.size / 2
+                pcmBytes = ByteArray(monoCount * 2)
+                val bb = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until monoCount) {
+                    val l = inSamples[i * 2].toInt()
+                    val r = inSamples[i * 2 + 1].toInt()
+                    bb.putShort(((l + r) / 2).toShort())
+                }
+            } else {
+                pcmBytes = ByteArray(inSamples.size * 2)
+                ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(inSamples)
+            }
+
+            val fos = FileOutputStream(targetMp3)
             val bufferInfo = MediaCodec.BufferInfo()
+            var offset = 0
             var isEos = false
 
             while (!isEos) {
@@ -168,13 +185,16 @@ object AudioExporter {
                 if (inputIndex >= 0) {
                     val byteBuffer = codec.getInputBuffer(inputIndex) ?: continue
                     byteBuffer.clear()
-                    val bytesRead = fis.read(inputBuffer)
-                    if (bytesRead <= 0) {
+                    val bytesToPut = minOf(pcmBytes.size - offset, byteBuffer.remaining())
+                    if (bytesToPut <= 0 && offset >= pcmBytes.size) {
                         codec.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         isEos = true
                     } else {
-                        byteBuffer.put(inputBuffer, 0, bytesRead)
-                        codec.queueInputBuffer(inputIndex, 0, bytesRead, System.nanoTime() / 1000, 0)
+                        byteBuffer.put(pcmBytes, offset, bytesToPut)
+                        offset += bytesToPut
+                        val flags = if (offset >= pcmBytes.size) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
+                        codec.queueInputBuffer(inputIndex, 0, bytesToPut, System.nanoTime() / 1000, flags)
+                        if (flags != 0) isEos = true
                     }
                 }
 
@@ -195,7 +215,6 @@ object AudioExporter {
                 }
             }
 
-            fis.close()
             fos.flush()
             fos.close()
             targetMp3.length() > 0

@@ -68,10 +68,10 @@ fun RamsFlatSlider(
             .height(32.dp)
             .testTag(testTag)
             .pointerInput(enabled, valueRange) {
-                if (!enabled) return@pointerInput
                 detectTapGestures(
                     onDoubleTap = { onDoubleTap() },
                     onTap = { offset ->
+                        if (!enabled) return@detectTapGestures
                         val norm = (offset.x / size.width).coerceIn(0f, 1f)
                         val newVal = valueRange.start + norm * (valueRange.endInclusive - valueRange.start)
                         onValueChange(newVal)
@@ -97,16 +97,16 @@ fun RamsFlatSlider(
 
             // Flat track background (light gray)
             drawRect(
-                color = if (enabled) LightGray else OffWhite,
+                color = if (enabled) LightGray else Color(0xFFE8E8E3),
                 topLeft = Offset(0f, trackY),
                 size = Size(size.width, trackHeight)
             )
 
-            // Flat active fill without lines at the ends
+            // Flat active fill
             val fillWidth = fraction * size.width
             if (fillWidth > 0f) {
                 drawRect(
-                    color = if (enabled) Charcoal else DarkGray,
+                    color = if (enabled) SolidBlack else Color(0xFFB0B0A8),
                     topLeft = Offset(0f, trackY),
                     size = Size(fillWidth, trackHeight)
                 )

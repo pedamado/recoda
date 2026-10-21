@@ -3,6 +3,7 @@ package com.example.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,21 +19,22 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,7 +50,6 @@ import com.example.ui.theme.OffWhite
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.RamsRed
 import com.example.ui.theme.SolidBlack
-import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 fun AudioMonitorScreen(
@@ -56,7 +57,6 @@ fun AudioMonitorScreen(
     onRequestPermission: () -> Unit
 ) {
     val context = LocalContext.current
-    val snackbarHostState = remember { SnackbarHostState() }
 
     val hasPermission by viewModel.hasPermission.collectAsStateWithLifecycle()
     val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
@@ -66,15 +66,12 @@ fun AudioMonitorScreen(
     val waveformPoints by viewModel.waveformState.collectAsStateWithLifecycle()
     val eqSettings by viewModel.eqSettings.collectAsStateWithLifecycle()
     val recordings by viewModel.recordings.collectAsStateWithLifecycle()
+    val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
 
-    LaunchedEffect(Unit) {
-        viewModel.userMessage.collectLatest { msg ->
-            snackbarHostState.showSnackbar(msg)
-        }
-    }
+    var totalDragX by remember { mutableFloatStateOf(0f) }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {},
         containerColor = OffWhite,
         contentWindowInsets = WindowInsets.statusBars
     ) { paddingValues ->
@@ -83,7 +80,7 @@ fun AudioMonitorScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Dieter Rams minimalist Top Header
+            // Dieter Rams minimalist Top Header: recoda :: [toast message]
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -93,7 +90,10 @@ fun AudioMonitorScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(6.dp)
@@ -108,20 +108,38 @@ fun AudioMonitorScreen(
                         fontWeight = FontWeight.Bold,
                         color = SolidBlack
                     )
+
+                    // In-header toast messages in gray font following recoda ::
+                    if (!statusMessage.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "::",
+                            fontFamily = MartianMonoFontFamily,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = DarkGray
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = statusMessage.orEmpty().lowercase(),
+                            fontFamily = MartianMonoFontFamily,
+                            fontSize = 10.sp,
+                            color = DarkGray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
-                // Power / Engine state status text
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { viewModel.toggleEngine() }
-                ) {
-                    Text(
-                        text = if (engineStatus.isRunning) "engine on" else "engine off",
-                        fontFamily = MartianMonoFontFamily,
-                        fontSize = 9.sp,
-                        color = if (engineStatus.isRunning) SolidBlack else DarkGray
-                    )
-                }
+                // Minimalist power toggle block (without "engine on" text label)
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .background(if (engineStatus.isRunning) SolidBlack else LightGray, RectangleShape)
+                        .border(1.dp, GrayBorder, RectangleShape)
+                        .clickable { viewModel.toggleEngine() }
+                        .testTag("engine_toggle_block")
+                )
             }
 
             // Minimalist Tab Navigation Bar: "recorder", "gallery" (no count), "playback"
@@ -178,11 +196,53 @@ fun AudioMonitorScreen(
                 }
             }
 
-            // Tab Content
+            // Tab Content with horizontal swipe navigation between tabs
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    .pointerInput(currentTab) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { totalDragX = 0f },
+                            onDragEnd = {
+                                val threshold = 40.dp.toPx()
+                                if (totalDragX < -threshold) {
+                                    // Swiping left: RECORDER -> GALLERY -> PLAYBACK
+                                    when (currentTab) {
+                                        AppTab.RECORDER -> {
+                                            viewModel.loadRecordings()
+                                            viewModel.setTab(AppTab.GALLERY)
+                                        }
+                                        AppTab.GALLERY -> {
+                                            viewModel.setTab(AppTab.PLAYBACK)
+                                        }
+                                        AppTab.PLAYBACK -> {
+                                            // Stop, no more swiping left possible
+                                        }
+                                    }
+                                } else if (totalDragX > threshold) {
+                                    // Swiping right: PLAYBACK -> GALLERY -> RECORDER
+                                    when (currentTab) {
+                                        AppTab.PLAYBACK -> {
+                                            viewModel.loadRecordings()
+                                            viewModel.setTab(AppTab.GALLERY)
+                                        }
+                                        AppTab.GALLERY -> {
+                                            viewModel.setTab(AppTab.RECORDER)
+                                        }
+                                        AppTab.RECORDER -> {
+                                            // Stop, no more swiping right possible
+                                        }
+                                    }
+                                }
+                                totalDragX = 0f
+                            },
+                            onDragCancel = { totalDragX = 0f },
+                            onHorizontalDrag = { _, dragAmount ->
+                                totalDragX += dragAmount
+                            }
+                        )
+                    }
             ) {
                 when (currentTab) {
                     AppTab.RECORDER -> {
@@ -210,8 +270,8 @@ fun AudioMonitorScreen(
                             onRenameRecording = { item, newName -> viewModel.renameRecording(item, newName) },
                             onShareRecording = { viewModel.shareRecording(context, it) },
                             onDeleteRecording = { viewModel.deleteRecording(it) },
-                            onExportRecording = { item, fmt, preset ->
-                                viewModel.exportRecording(item, fmt, preset, context)
+                            onExportRecording = { item, preset ->
+                                viewModel.exportRecording(item, preset, context)
                             },
                             onNavigateToRecorder = { viewModel.setTab(AppTab.RECORDER) }
                         )

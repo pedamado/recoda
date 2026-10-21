@@ -35,7 +35,7 @@ class AudioEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "AudioEngine"
-        const val SAMPLE_RATE = 48000
+        const val SAMPLE_RATE = 44100
         private const val LOW_SHELF_FREQ = 100.0f
         private const val MID_PEAK_FREQ = 1000.0f
         private const val HIGH_SHELF_FREQ = 8000.0f
@@ -61,7 +61,7 @@ class AudioEngine(private val context: Context) {
     private var playbackThread: Thread? = null
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
-    private var wavWriter: WavWriter? = null
+    private var m4aWriter: M4aWriter? = null
     private var currentRecordingFile: File? = null
 
     // Format & Hardware Telemetry
@@ -463,9 +463,9 @@ class AudioEngine(private val context: Context) {
                 audioTrack?.write(outShortArray, 0, samplesToWrite)
             }
 
-            // WAV Recording
+            // M4A Compressed Recording (AAC-LC 44.1kHz, 192kbps)
             if (isRecording) {
-                wavWriter?.writeSamples(outShortArray, samplesToWrite)
+                m4aWriter?.writeSamples(outShortArray, samplesToWrite)
             }
 
             // Always updating live VU meters and rolling waveform
@@ -482,7 +482,7 @@ class AudioEngine(private val context: Context) {
                 )
 
                 if (isRecording) {
-                    val recMs = wavWriter?.recordedDurationMs ?: 0L
+                    val recMs = m4aWriter?.recordedDurationMs ?: 0L
                     _engineStatus.value = _engineStatus.value.copy(currentRecordingTimeMs = recMs)
                 }
             }
@@ -490,39 +490,31 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
-     * Precomputes full-length waveform for the loaded audio file.
+     * Precomputes full-length waveform for the loaded audio file (.m4a, .mp3, .wav).
      */
     fun extractFullWaveform(file: File, numPoints: Int = 120): List<Float> {
-        if (!file.exists() || file.length() < 44) return List(numPoints) { 0.05f }
+        if (!file.exists()) return List(numPoints) { 0.05f }
         return try {
-            val dataBytes = file.length() - 44
-            val totalShorts = dataBytes / 2
-            val shortsPerBucket = (totalShorts / numPoints).coerceAtLeast(1)
-            val result = mutableListOf<Float>()
+            val decoded = AudioDecoder.decodeToStereoPcm(file, SAMPLE_RATE) ?: return List(numPoints) { 0.05f }
+            val samples = decoded.samples
+            val totalFrames = samples.size / 2
+            if (totalFrames <= 0) return List(numPoints) { 0.05f }
 
-            RandomAccessFile(file, "r").use { raf ->
-                raf.seek(44)
-                val buffer = ByteArray(4096)
-                var currentPeak = 0
-                var shortsInBucket = 0L
+            val framesPerBucket = (totalFrames / numPoints).coerceAtLeast(1)
+            val result = ArrayList<Float>(numPoints)
 
-                while (result.size < numPoints) {
-                    val bytesRead = raf.read(buffer)
-                    if (bytesRead <= 0) break
-                    val shortsRead = bytesRead / 2
-                    val bb = ByteBuffer.wrap(buffer, 0, bytesRead).order(ByteOrder.LITTLE_ENDIAN)
-                    for (s in 0 until shortsRead) {
-                        val sample = kotlin.math.abs(bb.getShort().toInt())
-                        if (sample > currentPeak) currentPeak = sample
-                        shortsInBucket++
-                        if (shortsInBucket >= shortsPerBucket) {
-                            result.add((currentPeak / 32768.0f).coerceIn(0.02f, 1.0f))
-                            currentPeak = 0
-                            shortsInBucket = 0L
-                            if (result.size >= numPoints) break
-                        }
-                    }
+            for (b in 0 until numPoints) {
+                val startFrame = b * framesPerBucket
+                val endFrame = minOf(startFrame + framesPerBucket, totalFrames)
+                var maxAmp = 0
+                for (f in startFrame until endFrame) {
+                    val l = kotlin.math.abs(samples[f * 2].toInt())
+                    val r = kotlin.math.abs(samples[f * 2 + 1].toInt())
+                    val peak = maxOf(l, r)
+                    if (peak > maxAmp) maxAmp = peak
                 }
+                val norm = (maxAmp / 32768.0f).coerceIn(0.02f, 1.0f)
+                result.add(norm)
             }
             while (result.size < numPoints) result.add(0.02f)
             result
@@ -532,15 +524,22 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
-     * Plays back a recorded WAV file through AudioTrack with variable speed and reverse support.
+     * Plays back a recorded audio file (.m4a, .wav) through AudioTrack with variable speed and reverse support.
      */
     fun startPlayback(recordingItem: RecordingItem, startPositionMs: Long = 0L) {
         stopPlayback()
         initAudioTrack()
 
+        val decoded = AudioDecoder.decodeToStereoPcm(recordingItem.file, SAMPLE_RATE)
+        if (decoded == null) {
+            Log.e(TAG, "Failed to decode audio file for playback: ${recordingItem.file.name}")
+            stopPlayback()
+            return
+        }
+
         playbackFile = recordingItem.file
         currentPlaybackMs = startPositionMs
-        totalPlaybackDurationMs = recordingItem.durationMs
+        totalPlaybackDurationMs = if (recordingItem.durationMs > 0L) recordingItem.durationMs else decoded.durationMs
         isPlayingFile = true
 
         currentFileWaveform = extractFullWaveform(recordingItem.file)
@@ -550,7 +549,7 @@ class AudioEngine(private val context: Context) {
             activePlaybackFile = recordingItem,
             isPlayingFile = true,
             playbackPositionMs = startPositionMs,
-            playbackDurationMs = recordingItem.durationMs,
+            playbackDurationMs = totalPlaybackDurationMs,
             playbackSpeed = playbackSpeed,
             playbackFileWaveform = currentFileWaveform,
             isLooping = isLooping
@@ -558,7 +557,7 @@ class AudioEngine(private val context: Context) {
 
         playbackThread = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-            playbackAudioLoop(recordingItem.file, startPositionMs)
+            playbackAudioLoop(decoded, startPositionMs)
         }, "RecodaPlaybackThread").apply {
             start()
         }
@@ -648,156 +647,146 @@ class AudioEngine(private val context: Context) {
         _engineStatus.value = _engineStatus.value.copy(playbackSpeed = playbackSpeed)
     }
 
-    private fun playbackAudioLoop(file: File, startPositionMs: Long) {
-        if (!file.exists()) {
+    private fun playbackAudioLoop(decodedAudio: DecodedAudio, startPositionMs: Long) {
+        val samples = decodedAudio.samples
+        val totalFrames = (samples.size / 2).toDouble()
+        if (totalFrames <= 0.0) {
             stopPlayback()
             return
         }
 
         try {
-            RandomAccessFile(file, "r").use { raf ->
-                val dataSizeBytes = (file.length() - 44).coerceAtLeast(0L)
-                val totalFrames = (dataSizeBytes / 4).toDouble()
-                val bytesPerSecond = SAMPLE_RATE * 2 * 2 // 48000 * 4 = 192000
+            var currentFrameIndex: Double = (startPositionMs * SAMPLE_RATE.toDouble()) / 1000.0
 
-                var currentFrameIndex: Double = (startPositionMs * SAMPLE_RATE.toDouble()) / 1000.0
+            val frameCount = 256
+            val outShortArray = ShortArray(frameCount * 2)
 
-                val frameCount = 256
-                val outShortArray = ShortArray(frameCount * 2)
-                val readByteBuffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            var lastMeterUpdateTime = 0L
 
-                var lastMeterUpdateTime = 0L
+            while (isPlayingFile && isRunning) {
+                val seekTarget = playbackSeekRequestedMs
+                if (seekTarget != null) {
+                    currentFrameIndex = (seekTarget * SAMPLE_RATE.toDouble()) / 1000.0
+                    playbackSeekRequestedMs = null
+                }
 
-                while (isPlayingFile && isRunning) {
-                    val seekTarget = playbackSeekRequestedMs
-                    if (seekTarget != null) {
-                        currentFrameIndex = (seekTarget * SAMPLE_RATE.toDouble()) / 1000.0
-                        playbackSeekRequestedMs = null
+                val speed = playbackSpeed
+
+                // Bounds check based on playback direction
+                if (speed < 0 && currentFrameIndex <= 0.0) {
+                    if (isLooping) {
+                        currentFrameIndex = (totalFrames - 1.0).coerceAtLeast(0.0)
+                    } else {
+                        break // Reached beginning in reverse
                     }
+                }
+                if (speed > 0 && currentFrameIndex >= totalFrames) {
+                    if (isLooping) {
+                        currentFrameIndex = 0.0
+                    } else {
+                        break // Reached end of file
+                    }
+                }
 
-                    val speed = playbackSpeed
+                val targetGainLinear = 10.0f.pow(targetGainDb / 20.0f)
+                val gainStep = (targetGainLinear - currentGainLinear) / frameCount
+                val gateThresholdLinear = 10.0f.pow(noiseRemovalThresholdDb / 20.0f)
 
-                    // Bounds check based on playback direction
-                    if (speed < 0 && currentFrameIndex <= 0.0) {
-                        if (isLooping) {
-                            currentFrameIndex = (totalFrames - 1.0).coerceAtLeast(0.0)
+                var leftPeakRaw = 0.0f
+                var rightPeakRaw = 0.0f
+                var leftSumSq = 0.0
+                var rightSumSq = 0.0
+
+                val bypassEq = isEqBypassed
+                val limiter = isLimiterActive
+                val outVol = volumeOut
+                val noiseRemoval = isNoiseRemovalActive
+                val muteL = isLeftMuted
+                val muteR = isRightMuted
+
+                for (i in 0 until frameCount) {
+                    val frameClamped = currentFrameIndex.toInt().coerceIn(0, totalFrames.toInt() - 1)
+                    val rawLeft = samples[frameClamped * 2] / 32768.0f
+                    val rawRight = samples[frameClamped * 2 + 1] / 32768.0f
+
+                    currentGainLinear += gainStep
+                    var procL = rawLeft * currentGainLinear
+                    var procR = rawRight * currentGainLinear
+
+                    if (noiseRemoval) {
+                        val maxInstantAmp = max(kotlin.math.abs(procL), kotlin.math.abs(procR))
+                        gateEnvelope = if (maxInstantAmp > gateEnvelope) {
+                            0.7f * gateEnvelope + 0.3f * maxInstantAmp
                         } else {
-                            break // Reached beginning in reverse
+                            0.95f * gateEnvelope + 0.05f * maxInstantAmp
                         }
+
+                        val gateFactor = if (gateEnvelope < gateThresholdLinear) {
+                            val ratio = (gateEnvelope / gateThresholdLinear.coerceAtLeast(1e-5f))
+                            (ratio * ratio * ratio).coerceIn(0.0f, 1.0f)
+                        } else 1.0f
+
+                        procL *= gateFactor
+                        procR *= gateFactor
                     }
-                    if (speed > 0 && currentFrameIndex >= totalFrames) {
+
+                    if (!bypassEq) {
+                        procL = highShelfFilter.processLeft(midPeakFilter.processLeft(lowShelfFilter.processLeft(procL)))
+                        procR = highShelfFilter.processRight(midPeakFilter.processRight(lowShelfFilter.processRight(procR)))
+                    }
+
+                    if (limiter) {
+                        procL = softLimit(procL)
+                        procR = softLimit(procR)
+                    }
+
+                    if (muteL) procL = 0.0f
+                    if (muteR) procR = 0.0f
+
+                    val absL = kotlin.math.abs(procL)
+                    val absR = kotlin.math.abs(procR)
+                    if (absL > leftPeakRaw) leftPeakRaw = absL
+                    if (absR > rightPeakRaw) rightPeakRaw = absR
+                    leftSumSq += (procL * procL).toDouble()
+                    rightSumSq += (procR * procR).toDouble()
+
+                    val outL = (procL * outVol).coerceIn(-1.0f, 1.0f)
+                    val outR = (procR * outVol).coerceIn(-1.0f, 1.0f)
+
+                    outShortArray[i * 2] = (outL * 32767.0f).toInt().toShort()
+                    outShortArray[i * 2 + 1] = (outR * 32767.0f).toInt().toShort()
+
+                    currentFrameIndex += speed
+                    if (currentFrameIndex < 0.0 || currentFrameIndex >= totalFrames) {
                         if (isLooping) {
-                            currentFrameIndex = 0.0
+                            if (currentFrameIndex < 0.0) {
+                                currentFrameIndex = (totalFrames - 1.0).coerceAtLeast(0.0)
+                            } else if (currentFrameIndex >= totalFrames) {
+                                currentFrameIndex = 0.0
+                            }
                         } else {
-                            break // Reached end of file
+                            break
                         }
                     }
+                }
 
-                    val targetGainLinear = 10.0f.pow(targetGainDb / 20.0f)
-                    val gainStep = (targetGainLinear - currentGainLinear) / frameCount
-                    val gateThresholdLinear = 10.0f.pow(noiseRemovalThresholdDb / 20.0f)
+                audioTrack?.write(outShortArray, 0, frameCount * 2)
+                currentPlaybackMs = ((currentFrameIndex * 1000.0) / SAMPLE_RATE.toDouble()).toLong().coerceIn(0L, totalPlaybackDurationMs)
 
-                    var leftPeakRaw = 0.0f
-                    var rightPeakRaw = 0.0f
-                    var leftSumSq = 0.0
-                    var rightSumSq = 0.0
-
-                    val bypassEq = isEqBypassed
-                    val limiter = isLimiterActive
-                    val outVol = volumeOut
-                    val noiseRemoval = isNoiseRemovalActive
-                    val muteL = isLeftMuted
-                    val muteR = isRightMuted
-
-                    for (i in 0 until frameCount) {
-                        val frameClamped = currentFrameIndex.toLong().coerceIn(0L, totalFrames.toLong() - 1L)
-                        val fileOffset = 44L + frameClamped * 4L
-                        raf.seek(fileOffset)
-                        readByteBuffer.clear()
-                        raf.read(readByteBuffer.array(), 0, 4)
-
-                        val rawLeft = readByteBuffer.getShort(0) / 32768.0f
-                        val rawRight = readByteBuffer.getShort(2) / 32768.0f
-
-                        currentGainLinear += gainStep
-                        var procL = rawLeft * currentGainLinear
-                        var procR = rawRight * currentGainLinear
-
-                        if (noiseRemoval) {
-                            val maxInstantAmp = max(kotlin.math.abs(procL), kotlin.math.abs(procR))
-                            gateEnvelope = if (maxInstantAmp > gateEnvelope) {
-                                0.7f * gateEnvelope + 0.3f * maxInstantAmp
-                            } else {
-                                0.95f * gateEnvelope + 0.05f * maxInstantAmp
-                            }
-
-                            val gateFactor = if (gateEnvelope < gateThresholdLinear) {
-                                val ratio = (gateEnvelope / gateThresholdLinear.coerceAtLeast(1e-5f))
-                                (ratio * ratio * ratio).coerceIn(0.0f, 1.0f)
-                            } else 1.0f
-
-                            procL *= gateFactor
-                            procR *= gateFactor
-                        }
-
-                        if (!bypassEq) {
-                            procL = highShelfFilter.processLeft(midPeakFilter.processLeft(lowShelfFilter.processLeft(procL)))
-                            procR = highShelfFilter.processRight(midPeakFilter.processRight(lowShelfFilter.processRight(procR)))
-                        }
-
-                        if (limiter) {
-                            procL = softLimit(procL)
-                            procR = softLimit(procR)
-                        }
-
-                        if (muteL) procL = 0.0f
-                        if (muteR) procR = 0.0f
-
-                        val absL = kotlin.math.abs(procL)
-                        val absR = kotlin.math.abs(procR)
-                        if (absL > leftPeakRaw) leftPeakRaw = absL
-                        if (absR > rightPeakRaw) rightPeakRaw = absR
-                        leftSumSq += (procL * procL).toDouble()
-                        rightSumSq += (procR * procR).toDouble()
-
-                        val outL = (procL * outVol).coerceIn(-1.0f, 1.0f)
-                        val outR = (procR * outVol).coerceIn(-1.0f, 1.0f)
-
-                        outShortArray[i * 2] = (outL * 32767.0f).toInt().toShort()
-                        outShortArray[i * 2 + 1] = (outR * 32767.0f).toInt().toShort()
-
-                        currentFrameIndex += speed
-                        if (currentFrameIndex < 0.0 || currentFrameIndex >= totalFrames) {
-                            if (isLooping) {
-                                if (currentFrameIndex < 0.0) {
-                                    currentFrameIndex = (totalFrames - 1.0).coerceAtLeast(0.0)
-                                } else if (currentFrameIndex >= totalFrames) {
-                                    currentFrameIndex = 0.0
-                                }
-                            } else {
-                                break
-                            }
-                        }
-                    }
-
-                    audioTrack?.write(outShortArray, 0, frameCount * 2)
-                    currentPlaybackMs = ((currentFrameIndex * 1000.0) / SAMPLE_RATE.toDouble()).toLong().coerceIn(0L, totalPlaybackDurationMs)
-
-                    val now = System.currentTimeMillis()
-                    if (now - lastMeterUpdateTime >= 25L) {
-                        lastMeterUpdateTime = now
-                        processPlaybackMetering(
-                            frames = frameCount,
-                            leftPeak = leftPeakRaw,
-                            rightPeak = rightPeakRaw,
-                            leftSumSq = leftSumSq,
-                            rightSumSq = rightSumSq,
-                            now = now
-                        )
-                        _engineStatus.value = _engineStatus.value.copy(
-                            playbackPositionMs = currentPlaybackMs
-                        )
-                    }
+                val now = System.currentTimeMillis()
+                if (now - lastMeterUpdateTime >= 25L) {
+                    lastMeterUpdateTime = now
+                    processPlaybackMetering(
+                        frames = frameCount,
+                        leftPeak = leftPeakRaw,
+                        rightPeak = rightPeakRaw,
+                        leftSumSq = leftSumSq,
+                        rightSumSq = rightSumSq,
+                        now = now
+                    )
+                    _engineStatus.value = _engineStatus.value.copy(
+                        playbackPositionMs = currentPlaybackMs
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -1068,13 +1057,13 @@ class AudioEngine(private val context: Context) {
 
         val recordingsDir = File(context.getExternalFilesDir(null), "recordings").apply { mkdirs() }
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val file = File(recordingsDir, "rec_$timeStamp.wav")
+        val file = File(recordingsDir, "rec_$timeStamp.m4a")
 
-        wavWriter = WavWriter(
+        m4aWriter = M4aWriter(
             outputFile = file,
             sampleRate = SAMPLE_RATE,
-            numChannels = 2,
-            bitsPerSample = 16
+            numChannels = 2, // Stereo 192kb/s 44100Hz 16-bit
+            bitRate = 192000 // 192 kbps
         )
         currentRecordingFile = file
         isRecording = true
@@ -1087,8 +1076,8 @@ class AudioEngine(private val context: Context) {
         if (!isRecording) return null
         isRecording = false
 
-        wavWriter?.close()
-        wavWriter = null
+        m4aWriter?.close()
+        m4aWriter = null
         val recordedFile = currentRecordingFile
         currentRecordingFile = null
         updateStatus()

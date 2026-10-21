@@ -55,6 +55,20 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
     private val _userMessage = MutableSharedFlow<String>()
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
 
+    private val _statusMessage = MutableStateFlow<String?>(null)
+    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+
+    fun showMessage(msg: String) {
+        viewModelScope.launch {
+            _statusMessage.value = msg
+            _userMessage.emit(msg)
+            kotlinx.coroutines.delay(3500)
+            if (_statusMessage.value == msg) {
+                _statusMessage.value = null
+            }
+        }
+    }
+
     init {
         loadRecordings()
     }
@@ -69,9 +83,7 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
             engine.start()
         } else {
             engine.stop()
-            viewModelScope.launch {
-                _userMessage.emit("record_audio permission needed")
-            }
+            showMessage("record_audio permission needed")
         }
     }
 
@@ -150,19 +162,15 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
     // Recording Controls (Auto-recording is OFF by default)
     fun toggleRecording() {
         if (!_hasPermission.value) {
-            viewModelScope.launch {
-                _userMessage.emit("mic permission required")
-            }
+            showMessage("mic permission required")
             return
         }
 
         if (engineStatus.value.isRecording) {
             val file = engine.stopRecording()
             if (file != null) {
-                viewModelScope.launch {
-                    _userMessage.emit("saved: ${file.name}")
-                    loadRecordings()
-                }
+                showMessage("saved: ${file.name}")
+                loadRecordings()
             }
         } else {
             if (!engineStatus.value.isRunning) {
@@ -170,13 +178,9 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
             }
             try {
                 val file = engine.startRecording()
-                viewModelScope.launch {
-                    _userMessage.emit("recording: ${file.name}")
-                }
+                showMessage("recording: ${file.name}")
             } catch (e: Exception) {
-                viewModelScope.launch {
-                    _userMessage.emit("error: ${e.message}")
-                }
+                showMessage("error: ${e.message}")
             }
         }
     }
@@ -230,15 +234,14 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
             if (!dir.exists()) {
                 dir.mkdirs()
             }
-            // Only load files from the recordings folder (exports are in a separate exports folder!)
+            // Load .m4a and .mp3 files (no WAV support)
             val files = dir.listFiles { f ->
                 val ext = f.extension.lowercase()
-                ext == "wav" || ext == "mp3"
+                ext == "m4a" || ext == "mp3"
             } ?: emptyArray()
 
             val items = files.map { file ->
-                val dataBytes = (file.length() - 44).coerceAtLeast(0L)
-                val durationMs = (dataBytes * 1000L) / (48000L * 2 * 2)
+                val durationMs = com.example.audio.AudioDecoder.getDurationMs(file)
                 RecordingItem(
                     id = file.absolutePath,
                     name = file.name,
@@ -268,11 +271,11 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
             if (success) {
                 loadRecordings()
                 withContext(Dispatchers.Main) {
-                    _userMessage.emit("renamed to $finalName")
+                    showMessage("renamed to $finalName")
                 }
             } else {
                 withContext(Dispatchers.Main) {
-                    _userMessage.emit("rename failed")
+                    showMessage("rename failed")
                 }
             }
         }
@@ -286,7 +289,7 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
             item.file.delete()
             loadRecordings()
             withContext(Dispatchers.Main) {
-                _userMessage.emit("deleted ${item.name}")
+                showMessage("deleted ${item.name}")
             }
         }
     }
@@ -298,7 +301,10 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
                 "${context.packageName}.fileprovider",
                 item.file
             )
-            val mimeType = if (item.file.extension.equals("mp3", ignoreCase = true)) "audio/mpeg" else "audio/wav"
+            val mimeType = when (item.file.extension.lowercase()) {
+                "mp3" -> "audio/mpeg"
+                else -> "audio/mp4"
+            }
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -306,25 +312,22 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
             }
             context.startActivity(Intent.createChooser(intent, "share audio"))
         } catch (e: Exception) {
-            viewModelScope.launch {
-                _userMessage.emit("share error: ${e.message}")
-            }
+            showMessage("share error: ${e.message}")
         }
     }
 
     fun exportRecording(
         item: RecordingItem,
-        format: AudioExporter.ExportFormat,
-        preset: AudioExporter.QualityPreset,
+        preset: AudioExporter.ExportPreset,
         context: Context
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             // Save to dedicated exports/ folder so it never pollutes the gallery!
             val targetDir = File(getApplication<Application>().getExternalFilesDir(null), "exports")
-            val exported = AudioExporter.export(item.file, format, preset, targetDir)
+            val exported = AudioExporter.export(item.file, preset, targetDir)
             if (exported != null) {
                 withContext(Dispatchers.Main) {
-                    _userMessage.emit("exported: ${exported.name}")
+                    showMessage("exported: ${exported.name}")
                     shareRecording(
                         context,
                         RecordingItem(
@@ -339,7 +342,7 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
                 }
             } else {
                 withContext(Dispatchers.Main) {
-                    _userMessage.emit("export failed")
+                    showMessage("export failed")
                 }
             }
         }

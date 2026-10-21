@@ -19,7 +19,7 @@ data class EqSettings(
     val lowShelfGainDb: Float = 0.0f,  // 100 Hz (-30 dB to +30 dB)
     val midPeakGainDb: Float = 0.0f,    // 1 kHz (-30 dB to +30 dB)
     val highShelfGainDb: Float = 0.0f,  // 8 kHz (-30 dB to +30 dB)
-    val isBypassed: Boolean = false
+    val isBypassed: Boolean = true      // Disabled (inactive) by default
 )
 
 data class RecordingItem(
@@ -48,7 +48,7 @@ data class EngineStatus(
     val volumeOut: Float = 0.5f,             // Default 50%
     val isRecording: Boolean = false,
     val currentRecordingTimeMs: Long = 0L,
-    val sampleRate: Int = 48000,
+    val sampleRate: Int = 44100,
     val bufferSizeFrames: Int = 256,
     val inputGainDb: Float = 0.0f,           // Default 0 dB (-30 dB to +30 dB)
     val isLimiterActive: Boolean = false,    // Default OFF

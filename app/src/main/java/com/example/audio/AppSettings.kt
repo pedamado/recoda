@@ -48,7 +48,7 @@ class AppSettings(context: Context) {
         set(value) = prefs.edit().putFloat(KEY_HIGH_SHELF_DB, value).apply()
 
     var isEqBypassed: Boolean
-        get() = prefs.getBoolean(KEY_IS_EQ_BYPASSED, false)
+        get() = prefs.getBoolean(KEY_IS_EQ_BYPASSED, true) // Default true (EQ disabled by default)
         set(value) = prefs.edit().putBoolean(KEY_IS_EQ_BYPASSED, value).apply()
 
     var isLeftMuted: Boolean

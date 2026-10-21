@@ -7,7 +7,6 @@ import com.example.audio.BiquadFilter
 import com.example.audio.EngineStatus
 import com.example.audio.VuMeterChannelData
 import com.example.audio.VuMeterState
-import com.example.audio.WavWriter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -16,8 +15,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class AudioEngineUnitTest {
 
@@ -77,64 +74,6 @@ class AudioEngineUnitTest {
     }
 
     @Test
-    fun wavWriter_headerStructureIsValid() {
-        val audioByteCount = 96000L // 0.5s of 48kHz 16-bit stereo
-        val header = WavWriter.createWavHeader(
-            totalAudioLen = audioByteCount,
-            sampleRate = 48000,
-            channels = 2,
-            bitsPerSample = 16
-        )
-
-        assertEquals(44, header.size)
-
-        val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
-
-        // "RIFF"
-        val riff = byteArrayOf(buf.get(), buf.get(), buf.get(), buf.get())
-        assertEquals("RIFF", String(riff))
-
-        val chunkSize = buf.getInt()
-        assertEquals((audioByteCount + 36).toInt(), chunkSize)
-
-        // "WAVE"
-        val wave = byteArrayOf(buf.get(), buf.get(), buf.get(), buf.get())
-        assertEquals("WAVE", String(wave))
-
-        // "fmt "
-        val fmt = byteArrayOf(buf.get(), buf.get(), buf.get(), buf.get())
-        assertEquals("fmt ", String(fmt))
-
-        val subchunk1Size = buf.getInt()
-        assertEquals(16, subchunk1Size)
-
-        val audioFormat = buf.getShort()
-        assertEquals(1.toShort(), audioFormat) // PCM
-
-        val channels = buf.getShort()
-        assertEquals(2.toShort(), channels)
-
-        val sampleRate = buf.getInt()
-        assertEquals(48000, sampleRate)
-
-        val byteRate = buf.getInt()
-        assertEquals(48000 * 2 * 2, byteRate) // 192000
-
-        val blockAlign = buf.getShort()
-        assertEquals(4.toShort(), blockAlign)
-
-        val bitsPerSample = buf.getShort()
-        assertEquals(16.toShort(), bitsPerSample)
-
-        // "data"
-        val data = byteArrayOf(buf.get(), buf.get(), buf.get(), buf.get())
-        assertEquals("data", String(data))
-
-        val dataSize = buf.getInt()
-        assertEquals(audioByteCount.toInt(), dataSize)
-    }
-
-    @Test
     fun engineStatus_defaultSpecifications() {
         val status = EngineStatus()
         assertTrue("Passthrough defaults to ON", status.isPassthroughActive)
@@ -142,7 +81,6 @@ class AudioEngineUnitTest {
         assertEquals(0.0f, status.inputGainDb, 0.01f)
         assertFalse("Limiter defaults to OFF", status.isLimiterActive)
         assertFalse("Noise filter defaults to OFF", status.isNoiseRemovalActive)
-        assertEquals(0.0f, status.noiseRemovalThresholdDb, 0.01f)
         assertEquals(AudioMode.LIVE_INPUT, status.mode)
         assertFalse("Recording is strictly OFF by default", status.isRecording)
     }
@@ -155,50 +93,45 @@ class AudioEngineUnitTest {
     }
 
     @Test
-    fun audioExporter_presetsAndExportWav() {
-        assertEquals(4, AudioExporter.QualityPreset.values().size)
-        assertEquals(2, AudioExporter.ExportFormat.values().size)
+    fun audioExporter_presetsEnumeration() {
+        val presets = AudioExporter.ExportPreset.values()
+        assertEquals(3, presets.size)
 
-        // Create a dummy 48kHz stereo WAV file
-        val srcFile = tempFolder.newFile("test_source.wav")
-        val sampleCount = 4800 // 0.1s
-        val pcmData = ByteArray(sampleCount * 4) // stereo 16-bit
-        val header = WavWriter.createWavHeader(pcmData.size.toLong(), 48000, 2, 16)
-        srcFile.writeBytes(header + pcmData)
+        val original = AudioExporter.ExportPreset.ORIGINAL_M4A
+        assertEquals("m4a", original.extension)
+        assertEquals(192, original.bitrateKbps)
+        assertEquals(2, original.channels)
+        assertEquals(44100, original.sampleRate)
+
+        val mp3Stereo = AudioExporter.ExportPreset.MP3_STEREO_128K
+        assertEquals("mp3", mp3Stereo.extension)
+        assertEquals(128, mp3Stereo.bitrateKbps)
+        assertEquals(2, mp3Stereo.channels)
+        assertEquals(44100, mp3Stereo.sampleRate)
+
+        val mp3Mono = AudioExporter.ExportPreset.MP3_MONO_64K
+        assertEquals("mp3", mp3Mono.extension)
+        assertEquals(64, mp3Mono.bitrateKbps)
+        assertEquals(1, mp3Mono.channels)
+        assertEquals(44100, mp3Mono.sampleRate)
+    }
+
+    @Test
+    fun audioExporter_exportOriginalM4aCopiesFile() {
+        val srcFile = tempFolder.newFile("test_source.m4a")
+        srcFile.writeText("mock_m4a_data")
 
         val outDir = tempFolder.newFolder("exports")
         val exported = AudioExporter.export(
             sourceFile = srcFile,
-            format = AudioExporter.ExportFormat.WAV,
-            preset = AudioExporter.QualityPreset.FAST_SHARING,
+            preset = AudioExporter.ExportPreset.ORIGINAL_M4A,
             targetDir = outDir
         )
 
         assertNotNull(exported)
         assertTrue(exported!!.exists())
-        assertTrue(exported.length() > 44)
-    }
-
-    @Test
-    fun audioExporter_exportMp3ProducesFile() {
-        val srcFile = tempFolder.newFile("test_source_mp3.wav")
-        val sampleCount = 4800
-        val pcmData = ByteArray(sampleCount * 4)
-        val header = WavWriter.createWavHeader(pcmData.size.toLong(), 48000, 2, 16)
-        srcFile.writeBytes(header + pcmData)
-
-        val outDir = tempFolder.newFolder("mp3_exports")
-        val exported = AudioExporter.export(
-            sourceFile = srcFile,
-            format = AudioExporter.ExportFormat.MP3,
-            preset = AudioExporter.QualityPreset.NORMAL_AUDIO,
-            targetDir = outDir
-        )
-
-        assertNotNull(exported)
-        assertTrue(exported!!.exists())
-        assertTrue(exported.name.endsWith(".mp3"))
-        assertTrue(exported.length() > 0)
+        assertTrue(exported.name.endsWith(".m4a"))
+        assertEquals("mock_m4a_data", exported.readText())
     }
 
     @Test

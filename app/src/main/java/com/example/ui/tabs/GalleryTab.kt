@@ -61,15 +61,14 @@ fun GalleryTab(
     onRenameRecording: (RecordingItem, String) -> Unit,
     onShareRecording: (RecordingItem) -> Unit,
     onDeleteRecording: (RecordingItem) -> Unit,
-    onExportRecording: (RecordingItem, AudioExporter.ExportFormat, AudioExporter.QualityPreset) -> Unit,
+    onExportRecording: (RecordingItem, AudioExporter.ExportPreset) -> Unit,
     onNavigateToRecorder: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var itemToExport by remember { mutableStateOf<RecordingItem?>(null) }
     var itemToRename by remember { mutableStateOf<RecordingItem?>(null) }
     var renameInput by remember { mutableStateOf("") }
-    var selectedFormat by remember { mutableStateOf(AudioExporter.ExportFormat.MP3) }
-    var selectedPreset by remember { mutableStateOf(AudioExporter.QualityPreset.NORMAL_AUDIO) }
+    var selectedPreset by remember { mutableStateOf(AudioExporter.ExportPreset.ORIGINAL_M4A) }
 
     Column(
         modifier = modifier
@@ -272,49 +271,21 @@ fun GalleryTab(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "format",
-                        fontFamily = MartianMonoFontFamily,
-                        fontSize = 10.sp,
-                        color = DarkGray
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(AudioExporter.ExportFormat.MP3 to "mp3", AudioExporter.ExportFormat.WAV to "wav").forEach { (fmt, label) ->
-                            val isSel = selectedFormat == fmt
-                            Box(
-                                modifier = Modifier
-                                    .background(if (isSel) SolidBlack else LightGray, RectangleShape)
-                                    .clickable { selectedFormat = fmt }
-                                    .padding(horizontal = 14.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontFamily = MartianMonoFontFamily,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSel) PureWhite else SolidBlack
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = "quality preset",
+                        text = "export preset",
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 10.sp,
                         color = DarkGray
                     )
 
-                    AudioExporter.QualityPreset.values().forEach { preset ->
+                    AudioExporter.ExportPreset.values().forEach { preset ->
                         val isSel = selectedPreset == preset
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(if (isSel) LightGray else PureWhite, RectangleShape)
                                 .border(1.dp, if (isSel) SolidBlack else GrayBorder, RectangleShape)
-                            .clickable { selectedPreset = preset }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                .clickable { selectedPreset = preset }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -348,7 +319,7 @@ fun GalleryTab(
                             val target = itemToExport
                             itemToExport = null
                             if (target != null) {
-                                onExportRecording(target, selectedFormat, selectedPreset)
+                                onExportRecording(target, selectedPreset)
                             }
                         }
                         .padding(horizontal = 14.dp, vertical = 8.dp)

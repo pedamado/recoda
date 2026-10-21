@@ -118,13 +118,15 @@ fun PlaybackTab(
                     else -> "100%"
                 }
 
-                Text(
-                    text = if (engineStatus.playbackSpeed != 1.0f) "speed: $speedLabel" else if (engineStatus.isPlayingFile) "playing" else "paused",
-                    fontFamily = MartianMonoFontFamily,
-                    fontSize = 9.sp,
-                    color = if (engineStatus.playbackSpeed != 1.0f) RamsRed else DarkGray,
-                    fontWeight = if (engineStatus.playbackSpeed != 1.0f) FontWeight.Bold else FontWeight.Normal
-                )
+                if (engineStatus.playbackSpeed != 1.0f) {
+                    Text(
+                        text = "speed: $speedLabel",
+                        fontFamily = MartianMonoFontFamily,
+                        fontSize = 9.sp,
+                        color = RamsRed,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -189,15 +191,9 @@ fun PlaybackTab(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "position",
-                    fontFamily = MartianMonoFontFamily,
-                    fontSize = 9.sp,
-                    color = DarkGray
-                )
                 Text(
                     text = timeStr,
                     fontFamily = MartianMonoFontFamily,
@@ -409,6 +405,7 @@ fun PlaybackTab(
                 .border(1.dp, GrayBorder, RectangleShape)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
+            val isEqActive = !eqSettings.isBypassed
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -424,25 +421,25 @@ fun PlaybackTab(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (eqSettings.isBypassed) "bypassed" else "active",
+                        text = if (isEqActive) "enabled" else "disabled",
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = if (eqSettings.isBypassed) RamsRed else DarkGray
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "bypass",
+                        text = if (isEqActive) "enabled" else "disabled",
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = DarkGray
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     RamsFlatToggle(
-                        checked = eqSettings.isBypassed,
-                        onCheckedChange = onEqBypassChange,
-                        testTag = "playback_eq_bypass_toggle"
+                        checked = isEqActive,
+                        onCheckedChange = { checked -> onEqBypassChange(!checked) },
+                        testTag = "playback_eq_toggle"
                     )
                 }
             }
@@ -467,21 +464,21 @@ fun PlaybackTab(
                         text = "low 100hz",
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = SolidBlack
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                     val valStr = String.format(Locale.US, "%+.1f db", eqSettings.lowShelfGainDb)
                     Text(
                         text = valStr,
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = DarkGray
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                 }
                 RamsFlatSlider(
                     value = eqSettings.lowShelfGainDb,
                     onValueChange = onLowShelfChange,
                     valueRange = -30f..30f,
-                    enabled = !eqSettings.isBypassed,
+                    enabled = isEqActive,
                     onDoubleTap = { onLowShelfChange(0.0f) },
                     testTag = "eq_low_slider"
                 )
@@ -505,21 +502,21 @@ fun PlaybackTab(
                         text = "mid 1khz",
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = SolidBlack
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                     val valStr = String.format(Locale.US, "%+.1f db", eqSettings.midPeakGainDb)
                     Text(
                         text = valStr,
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = DarkGray
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                 }
                 RamsFlatSlider(
                     value = eqSettings.midPeakGainDb,
                     onValueChange = onMidPeakChange,
                     valueRange = -30f..30f,
-                    enabled = !eqSettings.isBypassed,
+                    enabled = isEqActive,
                     onDoubleTap = { onMidPeakChange(0.0f) },
                     testTag = "eq_mid_slider"
                 )
@@ -543,21 +540,21 @@ fun PlaybackTab(
                         text = "high 8khz",
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = SolidBlack
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                     val valStr = String.format(Locale.US, "%+.1f db", eqSettings.highShelfGainDb)
                     Text(
                         text = valStr,
                         fontFamily = MartianMonoFontFamily,
                         fontSize = 9.sp,
-                        color = DarkGray
+                        color = if (isEqActive) SolidBlack else DarkGray
                     )
                 }
                 RamsFlatSlider(
                     value = eqSettings.highShelfGainDb,
                     onValueChange = onHighShelfChange,
                     valueRange = -30f..30f,
-                    enabled = !eqSettings.isBypassed,
+                    enabled = isEqActive,
                     onDoubleTap = { onHighShelfChange(0.0f) },
                     testTag = "eq_high_slider"
                 )
