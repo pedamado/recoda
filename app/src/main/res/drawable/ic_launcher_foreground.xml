@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center 66dp area: x=21 to 87, y=21 to 87 -->
+    <!-- Solid Black Recoda Module -->
+    <path
+        android:pathData="M 30,30 L 78,30 L 78,78 L 30,78 Z"
+        android:fillColor="#000000" />
+
+    <!-- Red Sparse Rec Dot -->
+    <path
+        android:pathData="M 38,38 A 4,4 0 1,1 37.9,38 Z"
+        android:fillColor="#E60000" />
+
+    <!-- White Waveform Bars / Geometric Slits -->
+    <path
+        android:pathData="M 48,58 L 51,58 L 51,50 L 48,50 Z"
+        android:fillColor="#FFFFFF" />
+    <path
+        android:pathData="M 54,64 L 57,64 L 57,44 L 54,44 Z"
+        android:fillColor="#FFFFFF" />
+    <path
+        android:pathData="M 60,68 L 63,68 L 63,40 L 60,40 Z"
+        android:fillColor="#FFFFFF" />
+    <path
+        android:pathData="M 66,60 L 69,60 L 69,48 L 66,48 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
