@@ -291,7 +291,15 @@ fun PlaybackTab(
                         .testTag("playback_play_pause_button"),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (engineStatus.isPlayingFile) {
+                    if (engineStatus.isLoadingPlayback) {
+                        Text(
+                            text = "...",
+                            fontFamily = MartianMonoFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = PureWhite
+                        )
+                    } else if (engineStatus.isPlayingFile) {
                         // Pause symbol (two geometric rectangles)
                         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                             Box(modifier = Modifier.size(3.dp, 12.dp).background(PureWhite))

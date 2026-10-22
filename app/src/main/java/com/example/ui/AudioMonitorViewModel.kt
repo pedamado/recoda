@@ -185,22 +185,76 @@ class AudioMonitorViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun setKeepScreenAwake(enabled: Boolean) {
+        engine.setKeepScreenAwake(enabled)
+    }
+
+    fun toggleKeepScreenAwake() {
+        engine.toggleKeepScreenAwake()
+    }
+
+    fun toggleMonitoring() {
+        val active = engine.toggleMonitoring()
+        showMessage(if (active) "audio in: listening" else "audio in: paused")
+    }
+
+    fun onHeaderButtonDown() {
+        val status = engineStatus.value
+        engine.setHeaderButtonHeld(true)
+        if (status.isRecording) {
+            engine.setRecordingTemporaryPaused(true)
+            showMessage("recording paused")
+        } else if (status.isMonitoring) {
+            engine.setMonitoringTemporaryMute(true)
+            showMessage("momentary mute")
+        } else {
+            engine.setMonitoringTemporaryPeek(true)
+            showMessage("momentary peek")
+        }
+    }
+
+    fun onHeaderButtonUp(durationMs: Long) {
+        engine.setHeaderButtonHeld(false)
+        engine.setRecordingTemporaryPaused(false)
+        engine.setMonitoringTemporaryMute(false)
+        engine.setMonitoringTemporaryPeek(false)
+
+        if (durationMs < 350L) {
+            // Tap gesture: toggle listening
+            toggleMonitoring()
+        } else {
+            // Long press release: restore normal status feedback
+            val status = engineStatus.value
+            if (status.isRecording) {
+                showMessage("recording resumed")
+            } else if (status.isMonitoring) {
+                showMessage("listening")
+            } else {
+                showMessage("audio in paused")
+            }
+        }
+    }
+
     // Playback Controls
     fun playFile(item: RecordingItem) {
         _currentTab.value = AppTab.PLAYBACK
         if (engineStatus.value.isPlayingFile && engineStatus.value.activePlaybackFile?.id == item.id) {
             engine.pausePlayback()
         } else {
-            engine.startPlayback(item)
+            viewModelScope.launch(Dispatchers.Default) {
+                engine.startPlayback(item)
+            }
         }
     }
 
     fun resumePlayback() {
         val active = engineStatus.value.activePlaybackFile
-        if (active != null) {
-            engine.startPlayback(active, engineStatus.value.playbackPositionMs)
-        } else if (_recordings.value.isNotEmpty()) {
-            engine.startPlayback(_recordings.value.first())
+        viewModelScope.launch(Dispatchers.Default) {
+            if (active != null) {
+                engine.startPlayback(active, engineStatus.value.playbackPositionMs)
+            } else if (_recordings.value.isNotEmpty()) {
+                engine.startPlayback(_recordings.value.first())
+            }
         }
     }
 

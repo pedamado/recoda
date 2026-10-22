@@ -46,6 +46,8 @@ The interface follows a strict **Dieter Rams & Teenage Engineering inspired mini
 * **Input Gain Calibration**: Wide $-30\text{ dB}$ to $+30\text{ dB}$ range featuring sample-interpolated smoothing to prevent zipper noise. Double-tap background reset to unity ($0\text{ dB}$).
 * **Passthrough & Output Level**: Toggleable live monitor with master volume slider (default 50%).
 * **Noise Gate Threshold**: Horizontal dB threshold slider with double-tap reset.
+* **Screen Awake Control & Lockscreen Recording**: Toggleable `screen awake` mode (`stays awake during rec`). Uses an Android Foreground Service with partial CPU wake-lock and microphone capture policy, guaranteeing uninterrupted background recording even if the phone screen locks or turns off.
+* **Status Favicon & Notification**: A Dieter Rams light gray square favicon with a slowly blinking white ball indicator in the app header and camera notch area, paired with a persistent status bar notification displaying the custom white ball icon during recording.
 * **Primary CTA**: Prominent solid black rectangular trigger for record/stop toggling with real-time timer.
 
 ### 3. screen 2: recordings archive (`gallery`)

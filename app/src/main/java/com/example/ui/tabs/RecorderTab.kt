@@ -58,6 +58,7 @@ fun RecorderTab(
     onVolumeOutChange: (Float) -> Unit,
     onNoiseRemovalToggle: (Boolean) -> Unit,
     onNoiseThresholdChange: (Float) -> Unit,
+    onKeepScreenAwakeToggle: (Boolean) -> Unit,
     onToggleRecording: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -68,33 +69,12 @@ fun RecorderTab(
             .padding(10.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // TOP SECTION (Approx 30% height): Waveform + Dual VU Meters
+        // TOP SECTION (Approx 30% height): Waveform + Dual VU Meters (flushed to top)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(0.30f)
         ) {
-            // Header: Only show recording indicator if recording; no "source" or "listening" text
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(20.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (engineStatus.isRecording) {
-                    Text(
-                        text = "rec ●",
-                        fontFamily = MartianMonoFontFamily,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = RamsRed
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -319,13 +299,49 @@ fun RecorderTab(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // BOTTOM SECTION: Big Solid Black CTA "rec" (Auto-recording is OFF by default)
+        // BOTTOM SECTION: Screen awake toggle + Big Solid Black CTA "rec"
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.22f),
+                .weight(0.24f),
             verticalArrangement = Arrangement.Bottom
         ) {
+            // Keep Screen Awake while recording option
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PureWhite)
+                    .border(1.dp, GrayBorder, RectangleShape)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "screen awake",
+                        fontFamily = MartianMonoFontFamily,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SolidBlack
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (engineStatus.isKeepScreenAwake) "on during rec" else "off",
+                        fontFamily = MartianMonoFontFamily,
+                        fontSize = 10.sp,
+                        color = if (engineStatus.isKeepScreenAwake) SolidBlack else DarkGray
+                    )
+                }
+
+                RamsFlatToggle(
+                    checked = engineStatus.isKeepScreenAwake,
+                    onCheckedChange = onKeepScreenAwakeToggle,
+                    testTag = "screen_awake_toggle"
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             val interactionSource = remember { MutableInteractionSource() }
 
             Box(

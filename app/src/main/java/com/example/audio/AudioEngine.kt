@@ -116,9 +116,18 @@ class AudioEngine(private val context: Context) {
     private val _waveformState = MutableStateFlow(waveformBuffer.toList())
     val waveformState: StateFlow<List<Float>> = _waveformState.asStateFlow()
 
+    @Volatile private var isKeepScreenAwake = settings.isKeepScreenAwake
+
+    @Volatile private var isMonitoringActive: Boolean = true
+    @Volatile private var isMonitoringTemporaryMute: Boolean = false
+    @Volatile private var isMonitoringTemporaryPeek: Boolean = false
+    @Volatile private var isRecordingTemporaryPaused: Boolean = false
+    @Volatile private var isHeaderButtonHeld: Boolean = false
+
     // Engine Status Flow initialized with persisted settings
     private val _engineStatus = MutableStateFlow(
         EngineStatus(
+            isMonitoring = true,
             isPassthroughActive = settings.isPassthroughActive,
             volumeOut = settings.volumeOut,
             isRecording = false,
@@ -127,7 +136,8 @@ class AudioEngine(private val context: Context) {
             isNoiseRemovalActive = settings.isNoiseRemovalActive,
             noiseRemovalThresholdDb = settings.noiseRemovalThresholdDb,
             isLeftMuted = settings.isLeftMuted,
-            isRightMuted = settings.isRightMuted
+            isRightMuted = settings.isRightMuted,
+            isKeepScreenAwake = settings.isKeepScreenAwake
         )
     )
     val engineStatus: StateFlow<EngineStatus> = _engineStatus.asStateFlow()
@@ -197,6 +207,7 @@ class AudioEngine(private val context: Context) {
         isRunning = false
         stopPlayback()
         stopRecording()
+        RecordingService.stop(context)
 
         audioThread?.let {
             try {
@@ -458,29 +469,39 @@ class AudioEngine(private val context: Context) {
             }
 
             val samplesToWrite = framesRead * 2
+            val effectiveMonitoring = (isMonitoringActive || isMonitoringTemporaryPeek) && !isMonitoringTemporaryMute
+            val effectiveRecording = isRecording && !isRecordingTemporaryPaused
 
             // Audible Low-Latency Passthrough (AudioTrack)
-            if (isPassthroughEnabled) {
+            if (isPassthroughEnabled && effectiveMonitoring) {
                 audioTrack?.write(outShortArray, 0, samplesToWrite)
             }
 
             // M4A Compressed Recording (AAC-LC 44.1kHz, 128kbps)
-            if (isRecording) {
+            if (effectiveRecording) {
                 m4aWriter?.writeSamples(outShortArray, samplesToWrite)
             }
 
-            // Always updating live VU meters and rolling waveform
+            // Always updating live VU meters and rolling waveform when monitoring is active
             val now = System.currentTimeMillis()
             if (now - lastMeterUpdateTime >= 25L) {
                 lastMeterUpdateTime = now
-                processMeteringAndWaveform(
-                    frames = framesRead,
-                    leftPeak = leftPeakRaw,
-                    rightPeak = rightPeakRaw,
-                    leftSumSq = leftSumSq,
-                    rightSumSq = rightSumSq,
-                    now = now
-                )
+                if (effectiveMonitoring) {
+                    processMeteringAndWaveform(
+                        frames = framesRead,
+                        leftPeak = leftPeakRaw,
+                        rightPeak = rightPeakRaw,
+                        leftSumSq = leftSumSq,
+                        rightSumSq = rightSumSq,
+                        now = now
+                    )
+                } else if (!isRecording) {
+                    // Monitoring muted or disabled: meters to silence
+                    _vuMeterState.value = VuMeterState(
+                        left = VuMeterChannelData(peakDb = MIN_DB, rmsDb = MIN_DB, peakHoldDb = MIN_DB, isMuted = isLeftMuted),
+                        right = VuMeterChannelData(peakDb = MIN_DB, rmsDb = MIN_DB, peakHoldDb = MIN_DB, isMuted = isRightMuted)
+                    )
+                }
 
                 if (isRecording) {
                     val recMs = m4aWriter?.recordedDurationMs ?: 0L
@@ -515,43 +536,85 @@ class AudioEngine(private val context: Context) {
 
     /**
      * Plays back a recorded audio file (.m4a, .mp3, .wav) through AudioTrack with variable speed and reverse support.
+     * Reuses already decoded data on resume and decodes asynchronously on background thread to prevent UI freezes.
      */
     fun startPlayback(recordingItem: RecordingItem, startPositionMs: Long = 0L) {
-        stopPlayback()
-        initAudioTrack()
+        val existingDecoded = activeDecodedAudio
+        if (existingDecoded != null && playbackFile?.absolutePath == recordingItem.file.absolutePath) {
+            pausePlayback()
+            initAudioTrack()
+            isPlayingFile = true
+            currentPlaybackMs = startPositionMs
+            totalPlaybackDurationMs = if (recordingItem.durationMs > 0L) recordingItem.durationMs else existingDecoded.durationMs
 
-        val decoded = AudioDecoder.decodeAudio(recordingItem.file, context.cacheDir, SAMPLE_RATE)
-        if (decoded == null) {
-            Log.e(TAG, "Failed to decode audio file for playback: ${recordingItem.file.name}")
-            stopPlayback()
+            _engineStatus.value = _engineStatus.value.copy(
+                mode = AudioMode.FILE_PLAYBACK,
+                activePlaybackFile = recordingItem,
+                isPlayingFile = true,
+                playbackPositionMs = startPositionMs,
+                playbackDurationMs = totalPlaybackDurationMs,
+                playbackSpeed = playbackSpeed,
+                playbackFileWaveform = currentFileWaveform,
+                isLooping = isLooping,
+                isLoadingPlayback = false
+            )
+
+            playbackThread = Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                playbackAudioLoop(existingDecoded, startPositionMs)
+            }, "RecodaPlaybackThread").apply {
+                start()
+            }
             return
         }
 
-        activeDecodedAudio = decoded
-        playbackFile = recordingItem.file
-        currentPlaybackMs = startPositionMs
-        totalPlaybackDurationMs = if (recordingItem.durationMs > 0L) recordingItem.durationMs else decoded.durationMs
-        isPlayingFile = true
-
-        currentFileWaveform = decoded.waveform
-
+        stopPlayback()
         _engineStatus.value = _engineStatus.value.copy(
             mode = AudioMode.FILE_PLAYBACK,
             activePlaybackFile = recordingItem,
-            isPlayingFile = true,
-            playbackPositionMs = startPositionMs,
-            playbackDurationMs = totalPlaybackDurationMs,
-            playbackSpeed = playbackSpeed,
-            playbackFileWaveform = currentFileWaveform,
-            isLooping = isLooping
+            isPlayingFile = false,
+            isLoadingPlayback = true
         )
 
-        playbackThread = Thread({
-            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-            playbackAudioLoop(decoded, startPositionMs)
-        }, "RecodaPlaybackThread").apply {
-            start()
-        }
+        Thread({
+            initAudioTrack()
+            val decoded = AudioDecoder.decodeAudio(recordingItem.file, context.cacheDir, SAMPLE_RATE)
+            if (decoded == null) {
+                Log.e(TAG, "Failed to decode audio file for playback: ${recordingItem.file.name}")
+                _engineStatus.value = _engineStatus.value.copy(
+                    mode = AudioMode.LIVE_INPUT,
+                    isPlayingFile = false,
+                    isLoadingPlayback = false
+                )
+                return@Thread
+            }
+
+            activeDecodedAudio = decoded
+            playbackFile = recordingItem.file
+            currentPlaybackMs = startPositionMs
+            totalPlaybackDurationMs = if (recordingItem.durationMs > 0L) recordingItem.durationMs else decoded.durationMs
+            isPlayingFile = true
+            currentFileWaveform = decoded.waveform
+
+            _engineStatus.value = _engineStatus.value.copy(
+                mode = AudioMode.FILE_PLAYBACK,
+                activePlaybackFile = recordingItem,
+                isPlayingFile = true,
+                playbackPositionMs = startPositionMs,
+                playbackDurationMs = totalPlaybackDurationMs,
+                playbackSpeed = playbackSpeed,
+                playbackFileWaveform = currentFileWaveform,
+                isLooping = isLooping,
+                isLoadingPlayback = false
+            )
+
+            playbackThread = Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                playbackAudioLoop(decoded, startPositionMs)
+            }, "RecodaPlaybackThread").apply {
+                start()
+            }
+        }, "RecodaDecodeThread").start()
     }
 
     fun pausePlayback() {
@@ -582,7 +645,50 @@ class AudioEngine(private val context: Context) {
             mode = AudioMode.LIVE_INPUT,
             isPlayingFile = false,
             playbackPositionMs = 0L,
-            playbackSpeed = 1.0f
+            playbackSpeed = 1.0f,
+            isLoadingPlayback = false
+        )
+    }
+
+    // Audio In Listening / Monitoring and Hold controls
+    fun toggleMonitoring(): Boolean {
+        isMonitoringActive = !isMonitoringActive
+        updateMonitoringStatus()
+        return isMonitoringActive
+    }
+
+    fun setMonitoring(enabled: Boolean) {
+        isMonitoringActive = enabled
+        updateMonitoringStatus()
+    }
+
+    fun setMonitoringTemporaryMute(muted: Boolean) {
+        isMonitoringTemporaryMute = muted
+        updateMonitoringStatus()
+    }
+
+    fun setMonitoringTemporaryPeek(peek: Boolean) {
+        isMonitoringTemporaryPeek = peek
+        updateMonitoringStatus()
+    }
+
+    fun setRecordingTemporaryPaused(paused: Boolean) {
+        isRecordingTemporaryPaused = paused
+        updateMonitoringStatus()
+    }
+
+    fun setHeaderButtonHeld(held: Boolean) {
+        isHeaderButtonHeld = held
+        updateMonitoringStatus()
+    }
+
+    private fun updateMonitoringStatus() {
+        _engineStatus.value = _engineStatus.value.copy(
+            isMonitoring = isMonitoringActive,
+            isMonitoringPaused = isMonitoringTemporaryMute,
+            isMonitoringPeek = isMonitoringTemporaryPeek,
+            isRecordingPaused = isRecordingTemporaryPaused,
+            isHeaderButtonHeld = isHeaderButtonHeld
         )
     }
 
@@ -1059,6 +1165,7 @@ class AudioEngine(private val context: Context) {
         )
         currentRecordingFile = file
         isRecording = true
+        RecordingService.start(context)
         updateStatus()
         return file
     }
@@ -1067,6 +1174,7 @@ class AudioEngine(private val context: Context) {
     fun stopRecording(): File? {
         if (!isRecording) return null
         isRecording = false
+        RecordingService.stop(context)
 
         val writer = m4aWriter
         m4aWriter = null
@@ -1080,6 +1188,17 @@ class AudioEngine(private val context: Context) {
         } else {
             null
         }
+    }
+
+    fun setKeepScreenAwake(enabled: Boolean) {
+        isKeepScreenAwake = enabled
+        settings.isKeepScreenAwake = enabled
+        updateStatus()
+    }
+
+    fun toggleKeepScreenAwake(): Boolean {
+        setKeepScreenAwake(!isKeepScreenAwake)
+        return isKeepScreenAwake
     }
 
     private fun updateStatus() {
@@ -1101,6 +1220,7 @@ class AudioEngine(private val context: Context) {
             playbackSpeed = playbackSpeed,
             playbackFileWaveform = currentFileWaveform,
             isLooping = isLooping,
+            isKeepScreenAwake = isKeepScreenAwake,
             errorMessage = null
         )
     }

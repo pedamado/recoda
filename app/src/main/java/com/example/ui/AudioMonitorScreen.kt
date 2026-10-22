@@ -94,13 +94,6 @@ fun AudioMonitorScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(if (engineStatus.isRecording) CircleShape else RectangleShape)
-                            .background(if (engineStatus.isRecording) RamsRed else SolidBlack)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "recoda",
                         fontFamily = MartianMonoFontFamily,
@@ -131,14 +124,13 @@ fun AudioMonitorScreen(
                     }
                 }
 
-                // Minimalist power toggle block (without "engine on" text label)
-                Box(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .background(if (engineStatus.isRunning) SolidBlack else LightGray, RectangleShape)
-                        .border(1.dp, GrayBorder, RectangleShape)
-                        .clickable { viewModel.toggleEngine() }
-                        .testTag("engine_toggle_block")
+                // Top-right light gray button with slowly pulsing circle (and momentary hold)
+                com.example.ui.components.RecodaHeaderButton(
+                    isMonitoring = engineStatus.isMonitoring,
+                    isRecording = engineStatus.isRecording,
+                    isHeld = engineStatus.isHeaderButtonHeld,
+                    onButtonDown = { viewModel.onHeaderButtonDown() },
+                    onButtonUp = { durationMs -> viewModel.onHeaderButtonUp(durationMs) }
                 )
             }
 
@@ -258,6 +250,7 @@ fun AudioMonitorScreen(
                             onVolumeOutChange = { viewModel.setVolumeOut(it) },
                             onNoiseRemovalToggle = { viewModel.toggleNoiseRemoval(it) },
                             onNoiseThresholdChange = { viewModel.setNoiseRemovalThreshold(it) },
+                            onKeepScreenAwakeToggle = { viewModel.setKeepScreenAwake(it) },
                             onToggleRecording = { viewModel.toggleRecording() }
                         )
                     }

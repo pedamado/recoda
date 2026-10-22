@@ -59,6 +59,10 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_IS_RIGHT_MUTED, false)
         set(value) = prefs.edit().putBoolean(KEY_IS_RIGHT_MUTED, value).apply()
 
+    var isKeepScreenAwake: Boolean
+        get() = prefs.getBoolean(KEY_IS_KEEP_SCREEN_AWAKE, true) // Default true (keeps screen awake while recording)
+        set(value) = prefs.edit().putBoolean(KEY_IS_KEEP_SCREEN_AWAKE, value).apply()
+
     companion object {
         private const val PREFS_NAME = "recoda_settings"
         private const val KEY_INPUT_GAIN_DB = "input_gain_db"
@@ -73,5 +77,6 @@ class AppSettings(context: Context) {
         private const val KEY_IS_EQ_BYPASSED = "is_eq_bypassed"
         private const val KEY_IS_LEFT_MUTED = "is_left_muted"
         private const val KEY_IS_RIGHT_MUTED = "is_right_muted"
+        private const val KEY_IS_KEEP_SCREEN_AWAKE = "is_keep_screen_awake"
     }
 }

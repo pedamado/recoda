@@ -44,14 +44,20 @@ enum class AudioMode {
 
 data class EngineStatus(
     val isRunning: Boolean = false,
-    val isPassthroughActive: Boolean = true, // Default ON
-    val volumeOut: Float = 0.5f,             // Default 50%
+    val isMonitoring: Boolean = true,          // Audio in "listening"/monitoring (default ON)
+    val isPassthroughActive: Boolean = true,   // Default ON
+    val volumeOut: Float = 0.5f,               // Default 50%
     val isRecording: Boolean = false,
+    val isRecordingPaused: Boolean = false,    // Temporarily paused while button held
+    val isMonitoringPaused: Boolean = false,   // Temporarily muted while button held
+    val isMonitoringPeek: Boolean = false,     // Temporarily listening while button held
+    val isHeaderButtonHeld: Boolean = false,   // Header button long press active
+    val isLoadingPlayback: Boolean = false,    // Decoding audio file for playback
     val currentRecordingTimeMs: Long = 0L,
     val sampleRate: Int = 44100,
     val bufferSizeFrames: Int = 256,
-    val inputGainDb: Float = 0.0f,           // Default 0 dB (-30 dB to +30 dB)
-    val isLimiterActive: Boolean = false,    // Default OFF
+    val inputGainDb: Float = 0.0f,             // Default 0 dB (-30 dB to +30 dB)
+    val isLimiterActive: Boolean = false,      // Default OFF
     val isNoiseRemovalActive: Boolean = false, // Default OFF
     val noiseRemovalThresholdDb: Float = -42.0f,
     val inputSourceInfo: String = "in",
@@ -66,5 +72,6 @@ data class EngineStatus(
     val playbackFileWaveform: List<Float> = emptyList(),
     val isPlayingFile: Boolean = false,
     val isLooping: Boolean = false,
+    val isKeepScreenAwake: Boolean = true,
     val errorMessage: String? = null
 )

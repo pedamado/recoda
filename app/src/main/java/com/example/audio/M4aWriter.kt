@@ -177,9 +177,7 @@ class M4aWriter(
                         }
                         lastMuxerPtsUs = bufferInfo.presentationTimeUs
 
-                        // Mark sync frame / keyframe for reliable seeking and MP4 indexing
-                        bufferInfo.flags = bufferInfo.flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
-
+                        // Monotonic timestamps ensure clean muxer indexing
                         try {
                             muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
                         } catch (e: Exception) {

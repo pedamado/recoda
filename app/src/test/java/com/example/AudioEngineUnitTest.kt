@@ -83,6 +83,7 @@ class AudioEngineUnitTest {
         assertFalse("Noise filter defaults to OFF", status.isNoiseRemovalActive)
         assertEquals(AudioMode.LIVE_INPUT, status.mode)
         assertFalse("Recording is strictly OFF by default", status.isRecording)
+        assertTrue("Keep screen awake defaults to ON", status.isKeepScreenAwake)
     }
 
     @Test
@@ -157,5 +158,16 @@ class AudioEngineUnitTest {
         val meterState = VuMeterState()
         assertEquals(-60f, meterState.left.peakDb, 0.01f)
         assertEquals(-60f, meterState.right.peakDb, 0.01f)
+    }
+
+    @Test
+    fun engineStatus_monitoringAndHoldDefaults() {
+        val status = EngineStatus()
+        assertTrue("Monitoring defaults to ON", status.isMonitoring)
+        assertFalse("Recording paused defaults to false", status.isRecordingPaused)
+        assertFalse("Monitoring paused defaults to false", status.isMonitoringPaused)
+        assertFalse("Monitoring peek defaults to false", status.isMonitoringPeek)
+        assertFalse("Header button held defaults to false", status.isHeaderButtonHeld)
+        assertFalse("Loading playback defaults to false", status.isLoadingPlayback)
     }
 }
