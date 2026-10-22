@@ -10,10 +10,11 @@ import java.nio.ByteOrder
 
 /**
  * Audio exporter supporting:
- * 1. Default: Original 192 kb/s stereo 44100Hz 16-bit .m4a (pristine master)
+ * 1. Default: Original 128 kb/s stereo 44100Hz 16-bit .m4a (pristine master)
  * 2. Medium quality: 128 kb/s stereo 44100Hz 16-bit .mp3
  * 3. Small file size: 64 kb/s mono 44100Hz 16-bit .mp3
  *
+ * Uses streaming chunk-based encoding to prevent memory spikes on large recordings.
  * No WAV export or support.
  */
 object AudioExporter {
@@ -29,10 +30,10 @@ object AudioExporter {
         val channels: Int
     ) {
         ORIGINAL_M4A(
-            label = "original m4a (192 kb/s stereo)",
-            description = "44.1kHz • 192 kb/s stereo • original master (default)",
+            label = "original m4a (128 kb/s stereo)",
+            description = "44.1kHz • 128 kb/s stereo • original master (default)",
             extension = "m4a",
-            bitrateKbps = 192,
+            bitrateKbps = 128,
             sampleRate = 44100,
             channels = 2
         ),
@@ -80,7 +81,7 @@ object AudioExporter {
                 ExportPreset.MP3_STEREO_128K,
                 ExportPreset.MP3_MONO_64K -> exportMp3(sourceFile, targetFile, preset)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Export failed for preset $preset", e)
             null
         }
@@ -91,18 +92,27 @@ object AudioExporter {
             sourceFile.copyTo(targetFile, overwrite = true)
             return targetFile
         }
-        // If source is not m4a, transcode to 192k stereo m4a
-        val decoded = AudioDecoder.decodeToStereoPcm(sourceFile, 44100) ?: return null
+        // If source is not m4a, transcode to 128k stereo m4a using streaming chunks
+        val decoded = AudioDecoder.decodeAudio(sourceFile, targetFile.parentFile, 44100) ?: return null
         val writer = M4aWriter(
             outputFile = targetFile,
             sampleRate = 44100,
             numChannels = 2,
-            bitRate = 192000
+            bitRate = 128000
         )
         try {
-            writer.writeSamples(decoded.samples, decoded.samples.size)
+            val chunkFrames = 2048
+            val chunkShorts = ShortArray(chunkFrames * 2)
+            var currentFrame = 0
+            while (currentFrame < decoded.totalFrames) {
+                val framesRead = decoded.readStereoFrames(currentFrame, chunkFrames, chunkShorts)
+                if (framesRead <= 0) break
+                writer.writeSamples(chunkShorts, framesRead * 2)
+                currentFrame += framesRead
+            }
         } finally {
             writer.close()
+            decoded.release()
         }
         return if (targetFile.exists() && targetFile.length() > 0) targetFile else null
     }
@@ -121,9 +131,8 @@ object AudioExporter {
         }
 
         // Clean fallback if hardware encoder lacks audio/mpeg: transcode to efficient AAC (.m4a) at that bitrate
-        // Notice: strictly compressed mobile audio, NO WAV files!
         val fallbackFile = File(targetFile.parentFile, "${targetFile.nameWithoutExtension}.m4a")
-        val decoded = AudioDecoder.decodeToStereoPcm(sourceFile, preset.sampleRate) ?: return null
+        val decoded = AudioDecoder.decodeAudio(sourceFile, targetFile.parentFile, preset.sampleRate) ?: return null
         val writer = M4aWriter(
             outputFile = fallbackFile,
             sampleRate = preset.sampleRate,
@@ -131,9 +140,18 @@ object AudioExporter {
             bitRate = preset.bitrateKbps * 1000
         )
         try {
-            writer.writeSamples(decoded.samples, decoded.samples.size)
+            val chunkFrames = 2048
+            val chunkShorts = ShortArray(chunkFrames * 2)
+            var currentFrame = 0
+            while (currentFrame < decoded.totalFrames) {
+                val framesRead = decoded.readStereoFrames(currentFrame, chunkFrames, chunkShorts)
+                if (framesRead <= 0) break
+                writer.writeSamples(chunkShorts, framesRead * 2)
+                currentFrame += framesRead
+            }
         } finally {
             writer.close()
+            decoded.release()
         }
         return if (fallbackFile.exists() && fallbackFile.length() > 0) fallbackFile else null
     }
@@ -146,6 +164,7 @@ object AudioExporter {
         channels: Int
     ): Boolean {
         var codec: MediaCodec? = null
+        var decoded: DecodedAudio? = null
         return try {
             val mimeType = "audio/mpeg"
             val format = MediaFormat.createAudioFormat(mimeType, sampleRate, channels).apply {
@@ -157,27 +176,18 @@ object AudioExporter {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             codec.start()
 
-            val decoded = AudioDecoder.decodeToStereoPcm(sourceFile, sampleRate) ?: return false
-            val inSamples = decoded.samples
-
-            val pcmBytes: ByteArray
-            if (channels == 1) {
-                val monoCount = inSamples.size / 2
-                pcmBytes = ByteArray(monoCount * 2)
-                val bb = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
-                for (i in 0 until monoCount) {
-                    val l = inSamples[i * 2].toInt()
-                    val r = inSamples[i * 2 + 1].toInt()
-                    bb.putShort(((l + r) / 2).toShort())
-                }
-            } else {
-                pcmBytes = ByteArray(inSamples.size * 2)
-                ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(inSamples)
-            }
+            decoded = AudioDecoder.decodeAudio(sourceFile, targetMp3.parentFile, sampleRate) ?: return false
+            val totalFrames = decoded.totalFrames
 
             val fos = FileOutputStream(targetMp3)
             val bufferInfo = MediaCodec.BufferInfo()
-            var offset = 0
+
+            val chunkFrames = 2048
+            val stereoChunk = ShortArray(chunkFrames * 2)
+            val pcmBytes = ByteArray(chunkFrames * channels * 2)
+            val pcmBb = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+
+            var frameCursor = 0
             var isEos = false
 
             while (!isEos) {
@@ -185,15 +195,34 @@ object AudioExporter {
                 if (inputIndex >= 0) {
                     val byteBuffer = codec.getInputBuffer(inputIndex) ?: continue
                     byteBuffer.clear()
-                    val bytesToPut = minOf(pcmBytes.size - offset, byteBuffer.remaining())
-                    if (bytesToPut <= 0 && offset >= pcmBytes.size) {
+
+                    if (frameCursor >= totalFrames) {
                         codec.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         isEos = true
                     } else {
-                        byteBuffer.put(pcmBytes, offset, bytesToPut)
-                        offset += bytesToPut
-                        val flags = if (offset >= pcmBytes.size) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
-                        codec.queueInputBuffer(inputIndex, 0, bytesToPut, System.nanoTime() / 1000, flags)
+                        val toRead = minOf(chunkFrames, totalFrames - frameCursor)
+                        val framesRead = decoded.readStereoFrames(frameCursor, toRead, stereoChunk)
+                        frameCursor += framesRead
+
+                        pcmBb.clear()
+                        if (channels == 1) {
+                            for (f in 0 until framesRead) {
+                                val l = stereoChunk[f * 2].toInt()
+                                val r = stereoChunk[f * 2 + 1].toInt()
+                                pcmBb.putShort(((l + r) / 2).toShort())
+                            }
+                        } else {
+                            for (f in 0 until framesRead) {
+                                pcmBb.putShort(stereoChunk[f * 2])
+                                pcmBb.putShort(stereoChunk[f * 2 + 1])
+                            }
+                        }
+                        val bytesReady = framesRead * channels * 2
+                        byteBuffer.put(pcmBytes, 0, bytesReady)
+
+                        val flags = if (frameCursor >= totalFrames) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
+                        val ptsUs = (frameCursor.toLong() * 1_000_000L) / sampleRate.toLong()
+                        codec.queueInputBuffer(inputIndex, 0, bytesReady, ptsUs, flags)
                         if (flags != 0) isEos = true
                     }
                 }
@@ -218,13 +247,14 @@ object AudioExporter {
             fos.flush()
             fos.close()
             targetMp3.length() > 0
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         } finally {
             try {
                 codec?.stop()
                 codec?.release()
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
+            decoded?.release()
         }
     }
 }

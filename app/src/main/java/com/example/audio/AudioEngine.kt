@@ -63,6 +63,7 @@ class AudioEngine(private val context: Context) {
     private var audioTrack: AudioTrack? = null
     private var m4aWriter: M4aWriter? = null
     private var currentRecordingFile: File? = null
+    private var activeDecodedAudio: DecodedAudio? = null
 
     // Format & Hardware Telemetry
     private var isStereoInput = true
@@ -463,7 +464,7 @@ class AudioEngine(private val context: Context) {
                 audioTrack?.write(outShortArray, 0, samplesToWrite)
             }
 
-            // M4A Compressed Recording (AAC-LC 44.1kHz, 192kbps)
+            // M4A Compressed Recording (AAC-LC 44.1kHz, 128kbps)
             if (isRecording) {
                 m4aWriter?.writeSamples(outShortArray, samplesToWrite)
             }
@@ -490,59 +491,49 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
-     * Precomputes full-length waveform for the loaded audio file (.m4a, .mp3, .wav).
+     * Precomputes or retrieves full-length waveform for the audio file (.m4a, .mp3, .wav).
      */
-    fun extractFullWaveform(file: File, numPoints: Int = 120): List<Float> {
+     fun extractFullWaveform(file: File, numPoints: Int = 120): List<Float> {
         if (!file.exists()) return List(numPoints) { 0.05f }
+        val active = activeDecodedAudio
+        if (active != null && playbackFile == file && active.waveform.size == numPoints) {
+            return active.waveform
+        }
         return try {
-            val decoded = AudioDecoder.decodeToStereoPcm(file, SAMPLE_RATE) ?: return List(numPoints) { 0.05f }
-            val samples = decoded.samples
-            val totalFrames = samples.size / 2
-            if (totalFrames <= 0) return List(numPoints) { 0.05f }
-
-            val framesPerBucket = (totalFrames / numPoints).coerceAtLeast(1)
-            val result = ArrayList<Float>(numPoints)
-
-            for (b in 0 until numPoints) {
-                val startFrame = b * framesPerBucket
-                val endFrame = minOf(startFrame + framesPerBucket, totalFrames)
-                var maxAmp = 0
-                for (f in startFrame until endFrame) {
-                    val l = kotlin.math.abs(samples[f * 2].toInt())
-                    val r = kotlin.math.abs(samples[f * 2 + 1].toInt())
-                    val peak = maxOf(l, r)
-                    if (peak > maxAmp) maxAmp = peak
-                }
-                val norm = (maxAmp / 32768.0f).coerceIn(0.02f, 1.0f)
-                result.add(norm)
+            val decoded = AudioDecoder.decodeAudio(file, context.cacheDir, SAMPLE_RATE, numPoints)
+            if (decoded != null) {
+                val wf = decoded.waveform
+                decoded.release()
+                wf
+            } else {
+                List(numPoints) { 0.05f }
             }
-            while (result.size < numPoints) result.add(0.02f)
-            result
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             List(numPoints) { 0.05f }
         }
     }
 
     /**
-     * Plays back a recorded audio file (.m4a, .wav) through AudioTrack with variable speed and reverse support.
+     * Plays back a recorded audio file (.m4a, .mp3, .wav) through AudioTrack with variable speed and reverse support.
      */
     fun startPlayback(recordingItem: RecordingItem, startPositionMs: Long = 0L) {
         stopPlayback()
         initAudioTrack()
 
-        val decoded = AudioDecoder.decodeToStereoPcm(recordingItem.file, SAMPLE_RATE)
+        val decoded = AudioDecoder.decodeAudio(recordingItem.file, context.cacheDir, SAMPLE_RATE)
         if (decoded == null) {
             Log.e(TAG, "Failed to decode audio file for playback: ${recordingItem.file.name}")
             stopPlayback()
             return
         }
 
+        activeDecodedAudio = decoded
         playbackFile = recordingItem.file
         currentPlaybackMs = startPositionMs
         totalPlaybackDurationMs = if (recordingItem.durationMs > 0L) recordingItem.durationMs else decoded.durationMs
         isPlayingFile = true
 
-        currentFileWaveform = extractFullWaveform(recordingItem.file)
+        currentFileWaveform = decoded.waveform
 
         _engineStatus.value = _engineStatus.value.copy(
             mode = AudioMode.FILE_PLAYBACK,
@@ -584,6 +575,8 @@ class AudioEngine(private val context: Context) {
         }
         playbackThread = null
         playbackSpeed = 1.0f
+        activeDecodedAudio?.release()
+        activeDecodedAudio = null
         resetPlaybackMetering()
         _engineStatus.value = _engineStatus.value.copy(
             mode = AudioMode.LIVE_INPUT,
@@ -648,8 +641,7 @@ class AudioEngine(private val context: Context) {
     }
 
     private fun playbackAudioLoop(decodedAudio: DecodedAudio, startPositionMs: Long) {
-        val samples = decodedAudio.samples
-        val totalFrames = (samples.size / 2).toDouble()
+        val totalFrames = decodedAudio.totalFrames.toDouble()
         if (totalFrames <= 0.0) {
             stopPlayback()
             return
@@ -705,9 +697,9 @@ class AudioEngine(private val context: Context) {
                 val muteR = isRightMuted
 
                 for (i in 0 until frameCount) {
-                    val frameClamped = currentFrameIndex.toInt().coerceIn(0, totalFrames.toInt() - 1)
-                    val rawLeft = samples[frameClamped * 2] / 32768.0f
-                    val rawRight = samples[frameClamped * 2 + 1] / 32768.0f
+                    val frameClamped = currentFrameIndex.toInt().coerceIn(0, (totalFrames - 1.0).toInt().coerceAtLeast(0))
+                    val rawLeft = decodedAudio.getLeftSample(frameClamped) / 32768.0f
+                    val rawRight = decodedAudio.getRightSample(frameClamped) / 32768.0f
 
                     currentGainLinear += gainStep
                     var procL = rawLeft * currentGainLinear
@@ -1062,8 +1054,8 @@ class AudioEngine(private val context: Context) {
         m4aWriter = M4aWriter(
             outputFile = file,
             sampleRate = SAMPLE_RATE,
-            numChannels = 2, // Stereo 192kb/s 44100Hz 16-bit
-            bitRate = 192000 // 192 kbps
+            numChannels = 2, // Stereo 128kb/s 44100Hz 16-bit
+            bitRate = 128000 // 128 kbps (lightest CPU load, native AAC-LC)
         )
         currentRecordingFile = file
         isRecording = true
@@ -1076,12 +1068,18 @@ class AudioEngine(private val context: Context) {
         if (!isRecording) return null
         isRecording = false
 
-        m4aWriter?.close()
+        val writer = m4aWriter
         m4aWriter = null
+        writer?.close()
+
         val recordedFile = currentRecordingFile
         currentRecordingFile = null
         updateStatus()
-        return recordedFile
+        return if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
+            recordedFile
+        } else {
+            null
+        }
     }
 
     private fun updateStatus() {

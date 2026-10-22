@@ -1,6 +1,6 @@
 {
   "name": "recoda",
-  "description": "Minimalist Dieter Rams & Teenage Engineering inspired audio monitor, DSP processor, and WAV recorder/player.",
+  "description": "Minimalist Dieter Rams & Teenage Engineering inspired audio monitor, DSP processor, and compressed M4A/MP3 recorder and player.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

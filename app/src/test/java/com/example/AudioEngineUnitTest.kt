@@ -99,7 +99,7 @@ class AudioEngineUnitTest {
 
         val original = AudioExporter.ExportPreset.ORIGINAL_M4A
         assertEquals("m4a", original.extension)
-        assertEquals(192, original.bitrateKbps)
+        assertEquals(128, original.bitrateKbps)
         assertEquals(2, original.channels)
         assertEquals(44100, original.sampleRate)
 
