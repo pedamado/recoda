@@ -77,3 +77,64 @@ The interface follows a strict **Dieter Rams & Teenage Engineering inspired mini
 ---
 
 ## interface & interaction overview
+
+┌─────────────────────────────────────────────────────────────┐
+│ recoda :: engine ready                          [tabs: 1 2 3]│
+├─────────────────────────────────────────────────┬───────────┤
+│                                                 │ [CH1][CH2]│
+│  LIVE ROLLING WAVEFORM / FULL AUDIO WAVEFORM    │  VU METERS│
+│  (idle: light gray | recording/playing: black)  │  (tap to  │
+│                                                 │   mute)   │
+├─────────────────────────────────────────────────┴───────────┤
+│ input gain [-30dB .. 0dB .. +30dB]      (dbl-tap resets 0dB)│
+│ monitor / passthrough [on/off]    volume [0% .. 50% .. 100%]│
+│ noise removal filter [on/off]     threshold [-60dB .. 0dB]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│                      [  ●  REC  ]                           │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+---
+
+## tech stack & dependencies
+
+* **Language**: [Kotlin](https://kotlinlang.org/)
+* **UI Toolkit**: [Jetpack Compose](https://developer.android.com/jetpack/compose) (Material3 & Foundation primitives)
+* **Audio Framework**: Android Low Latency Audio API (`AudioRecord`, `AudioTrack`, `MediaRecorder`)
+* **Persistence**: `SharedPreferences` (AppSettings for gain, EQ, passthrough, noise threshold, and source preferences)
+* **File Sharing**: Android `FileProvider` (Scoped App Storage)
+
+---
+
+## getting started
+
+### prerequisites
+* Android Studio Ladybug / Koala or later
+* Android SDK 34+
+* Physical device recommended (low-latency audio performance and microphone dynamic ranges vary on emulators)
+
+### build & install
+```bash
+# Clone the repository
+git clone [https://github.com/your-username/recoda.git](https://github.com/your-username/recoda.git)
+cd recoda
+
+# Build debug APK
+./gradlew assembleDebug
+
+# Install on connected device
+./gradlew installDebug
+
+## credits & acknowledgments
+Concept, Design Direction & Research: Pedro Amado (FBAUP / i2ADS)
+
+# Application Architecture & Development:
+Built with Google AI Studio
+
+# Typography:
+Martian Mono — Designed by Roman Shamin & Evil Martians, licensed under the SIL Open Font License (OFL).
+
+# Hardware & Aesthetic Inspiration:
+Teenage Engineering (EP-133 K.O. II, PO Series)
+Design principles of Dieter Rams (Braun)
